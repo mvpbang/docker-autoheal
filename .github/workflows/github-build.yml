@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - 'v*'
+      - '*'
   schedule:
     - cron: '0 0 * * *'
 
@@ -13,38 +13,41 @@ jobs:
   multi:
     runs-on: ubuntu-latest
     steps:
-      -
-        name: Checkout
-        uses: actions/checkout@v2
-      -
-        name: Set up QEMU
-        uses: docker/setup-qemu-action@v1
-      -
-        name: Set up Docker Buildx
+      - name: Checkout
+        uses: actions/checkout@v4  # 升级至 v4，速度更快，支持 Node.js 20
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3  # 升级至 v3，全面支持新架构
+
+      - name: Set up Docker Buildx
         id: buildx
-        uses: docker/setup-buildx-action@v1
-      -
-        name: Login to DockerHub
-        uses: docker/login-action@v1
+        uses: docker/setup-buildx-action@v3  # 升级至 v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3  # 升级至 v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - if: github.ref == 'refs/heads/main'
-        name: Conditional(Set tag as `latest`)
-        run: echo "tag=mvpbang/docker-autoheal:latest" >> $GITHUB_ENV
+      # 动态提取并设置镜像标签，同时兼容定时任务（Cron）
+      - name: Set Docker Tag
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "tag=mvpbang/docker-autoheal:latest" >> $GITHUB_ENV
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=mvpbang/docker-autoheal:${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+          else
+            echo "tag=mvpbang/docker-autoheal:latest" >> $GITHUB_ENV
+          fi
 
-      - if: startsWith(github.ref, 'refs/tags/')
-        name: Conditional(Set tag as `{version}`)
-        run: echo "tag=mvpbang/docker-autoheal:${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
-
-      -
-        name: Build and push
-        uses: docker/build-push-action@v2
+      - name: Build and push
+        uses: docker/build-push-action@v6  # 升级至 v6，完美适配最新 Docker 特性
         with:
           context: .
           file: ./Dockerfile
           push: true
-          platforms: linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/ppc64le
+          # 移除了已经极为罕见且基础镜像通常不支持的 linux/386
+          # 增加了现代开源硬件主流的 linux/riscv64 架构
+          platforms: linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7,linux/ppc64le,linux/riscv64
           tags: |
             ${{ env.tag }}
