@@ -1,0 +1,22 @@
+2026-07-09 15:19:03 CST
+- 分析 docker-entrypoint 中 webhook 通知链路。
+- 将默认 webhook payload 改为飞书交互式消息卡片，成功为绿色卡片，失败为红色卡片。
+- 新增 WEBHOOK_TYPE=feishu_card 默认配置，并保留 WEBHOOK_TYPE=text 兼容旧版 JSON 文本 webhook。
+- 使用 jq 生成 webhook JSON，避免特殊字符破坏 payload。
+- 更新 Dockerfile、README.md、CHANGELOG.md。
+- 验证：sh -n docker-entrypoint；飞书卡片 payload jq 校验；文本 webhook payload jq 校验。
+
+2026-07-09 15:27:00 CST
+- 新增 AUTOHEAL_HOSTNAME，告警默认带上主机名。
+- 飞书消息卡片补充“宿主主机”字段。
+- 文本 webhook 消息前缀补充 Host 信息。
+- 更新 Dockerfile、README.md、CHANGELOG.md。
+
+2026-07-09 15:29:30 CST
+- 优化 AUTOHEAL_HOSTNAME 自动解析逻辑：优先从 Docker API /info.Name 获取宿主主机名，失败时回退到 hostname。
+- 更新 README.md 和 CHANGELOG.md 中的主机名说明。
+
+2026-07-09 15:48:04 CST
+- Dockerfile 新增 APK_MIRROR 构建参数。
+- apk 默认使用 https://mirrors.aliyun.com/alpine 国内源加速。
+- README.md 和 CHANGELOG.md 补充 apk 国内源配置说明。

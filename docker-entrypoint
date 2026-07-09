@@ -8,8 +8,10 @@ DOCKER_SOCK=${DOCKER_SOCK:-/var/run/docker.sock}
 UNIX_SOCK=""
 CURL_TIMEOUT=${CURL_TIMEOUT:-30}
 WEBHOOK_URL=${WEBHOOK_URL:-""}
-WEBHOOK_JSON_KEY=${WEBHOOK_JSON_KEY:-"text"}
+WEBHOOK_TYPE=${WEBHOOK_TYPE:-"feishu_card"}
+WEBHOOK_JSON_KEY=${WEBHOOK_JSON_KEY:-"content"}
 APPRISE_URL=${APPRISE_URL:-""}
+AUTOHEAL_HOSTNAME=${AUTOHEAL_HOSTNAME:-""}
 
 # only use unix domain socket if no TCP endpoint is defined
 case "${DOCKER_SOCK}" in
@@ -31,17 +33,21 @@ AUTOHEAL_INTERVAL=${AUTOHEAL_INTERVAL:-5}
 AUTOHEAL_DEFAULT_STOP_TIMEOUT=${AUTOHEAL_DEFAULT_STOP_TIMEOUT:-10}
 AUTOHEAL_ONLY_MONITOR_RUNNING=${AUTOHEAL_ONLY_MONITOR_RUNNING:-false}
 
-echo AUTOHEAL_CONTAINER_LABEL=${AUTOHEAL_CONTAINER_LABEL}
-echo AUTOHEAL_START_PERIOD=${AUTOHEAL_START_PERIOD}
-echo AUTOHEAL_INTERVAL=${AUTOHEAL_INTERVAL}
-echo AUTOHEAL_DEFAULT_STOP_TIMEOUT=${AUTOHEAL_DEFAULT_STOP_TIMEOUT}
-echo AUTOHEAL_ONLY_MONITOR_RUNNING=${AUTOHEAL_ONLY_MONITOR_RUNNING}
-
 docker_curl() {
   curl --max-time "${CURL_TIMEOUT}" --no-buffer -s \
   ${CA} ${CLIENT_KEY} ${CLIENT_CERT} \
   ${UNIX_SOCK} \
   "$@"
+}
+
+resolve_autoheal_hostname() {
+  if [ -n "$AUTOHEAL_HOSTNAME" ]
+  then
+    return
+  fi
+
+  AUTOHEAL_HOSTNAME=$(docker_curl "${HTTP_ENDPOINT}/info" | jq -r '.Name // empty' 2>/dev/null || true)
+  AUTOHEAL_HOSTNAME=${AUTOHEAL_HOSTNAME:-$(hostname)}
 }
 
 # shellcheck disable=2039
@@ -76,12 +82,16 @@ restart_container() {
 }
 
 notify_webhook() {
+  local webhook_status="$1"
+  local container_name="$2"
+  local container_short_id="$3"
+  shift 3
   local text="$@"
 
   if [ -n "$WEBHOOK_URL" ]
   then
     # execute webhook requests as background process to prevent healer from blocking
-    curl -s -X POST -H "Content-type: application/json" -d "$(generate_webhook_payload $text)"  "$WEBHOOK_URL"
+    curl -s -X POST -H "Content-type: application/json" -d "$(generate_webhook_payload "$webhook_status" "$container_name" "$container_short_id" "$text")"  "$WEBHOOK_URL"
   fi
 
   if [ -n "$APPRISE_URL" ]
@@ -101,12 +111,80 @@ notify_post_restart_script() {
 
 # https://towardsdatascience.com/proper-ways-to-pass-environment-variables-in-json-for-curl-post-f797d2698bf3
 generate_webhook_payload() {
+  local webhook_status="$1"
+  local container_name="$2"
+  local container_short_id="$3"
+  local template="blue"
+  local title="Autoheal 容器重启通知"
+  local status_text="$webhook_status"
+  local event_time
+  shift 3
   local text="$@"
-  cat <<EOF
-{
-  "$WEBHOOK_JSON_KEY":"$text"
-}
-EOF
+
+  event_time=$(date +%Y-%m-%d" "%H:%M:%S)
+
+  if [ "$WEBHOOK_TYPE" = "text" ]
+  then
+    jq -n --arg key "$WEBHOOK_JSON_KEY" --arg hostname "$AUTOHEAL_HOSTNAME" --arg text "$text" '{($key): ("Host " + $hostname + ": " + $text)}'
+    return
+  fi
+
+  case "$webhook_status" in
+    success)
+      template="green"
+      title="Autoheal 容器重启成功"
+      status_text="成功"
+      ;;
+    failed)
+      template="red"
+      title="Autoheal 容器重启失败"
+      status_text="失败"
+      ;;
+  esac
+
+  jq -n \
+    --arg template "$template" \
+    --arg title "$title" \
+    --arg status_text "$status_text" \
+    --arg hostname "$AUTOHEAL_HOSTNAME" \
+    --arg container_name "$container_name" \
+    --arg container_short_id "$container_short_id" \
+    --arg event_time "$event_time" \
+    --arg text "$text" \
+    '{
+      msg_type: "interactive",
+      card: {
+        config: {
+          wide_screen_mode: true
+        },
+        header: {
+          template: $template,
+          title: {
+            tag: "plain_text",
+            content: $title
+          }
+        },
+        elements: [
+          {
+            tag: "div",
+            text: {
+              tag: "lark_md",
+              content: ("**宿主主机：** " + $hostname + "\n**容器名称：** " + $container_name + "\n**容器 ID：** " + $container_short_id + "\n**处理结果：** " + $status_text + "\n**发生时间：** " + $event_time)
+            }
+          },
+          {
+            tag: "hr"
+          },
+          {
+            tag: "div",
+            text: {
+              tag: "lark_md",
+              content: $text
+            }
+          }
+        ]
+      }
+    }'
 }
 
 generate_apprise_payload() {
@@ -134,6 +212,16 @@ then
     echo "unix socket is currently not available" >&2
     exit 1
   fi
+
+  resolve_autoheal_hostname
+
+  echo AUTOHEAL_CONTAINER_LABEL=${AUTOHEAL_CONTAINER_LABEL}
+  echo AUTOHEAL_START_PERIOD=${AUTOHEAL_START_PERIOD}
+  echo AUTOHEAL_INTERVAL=${AUTOHEAL_INTERVAL}
+  echo AUTOHEAL_DEFAULT_STOP_TIMEOUT=${AUTOHEAL_DEFAULT_STOP_TIMEOUT}
+  echo AUTOHEAL_ONLY_MONITOR_RUNNING=${AUTOHEAL_ONLY_MONITOR_RUNNING}
+  echo AUTOHEAL_HOSTNAME=${AUTOHEAL_HOSTNAME}
+
   # Delayed startup
   if [ "$AUTOHEAL_START_PERIOD" -gt 0 ]
   then
@@ -164,9 +252,9 @@ then
         if ! restart_container "$CONTAINER_ID" "$TIMEOUT"
         then
           echo "$DATE Restarting container $CONTAINER_SHORT_ID failed" >&2
-          notify_webhook "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Failed to restart the container!" &
+          notify_webhook "failed" "${CONTAINER_NAME:1}" "$CONTAINER_SHORT_ID" "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Failed to restart the container!" &
         else
-          notify_webhook "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Successfully restarted the container!" &
+          notify_webhook "success" "${CONTAINER_NAME:1}" "$CONTAINER_SHORT_ID" "Container ${CONTAINER_NAME:1} (${CONTAINER_SHORT_ID}) found to be unhealthy. Successfully restarted the container!" &
         fi
         notify_post_restart_script "$CONTAINER_NAME" "$CONTAINER_SHORT_ID" "$CONTAINER_STATE" "$TIMEOUT" &
       fi

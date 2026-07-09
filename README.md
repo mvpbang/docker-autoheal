@@ -1,93 +1,95 @@
 # Docker Autoheal
 
-Monitor and restart unhealthy docker containers. 
-This functionality was proposed to be included with the addition of `HEALTHCHECK`, however didn't make the cut.
-This container is a stand-in till there is native support for `--exit-on-unhealthy` https://github.com/docker/docker/pull/22719.
+监控 Docker 容器健康状态，并在容器进入 `unhealthy` 后自动重启。该镜像通过 Docker API 查询容器健康状态，不需要在业务容器内安装额外组件。
 
-## Supported tags and Dockerfile links
-- [`latest` (*Dockerfile*)](https://github.com/willfarrell/docker-autoheal/blob/main/Dockerfile) - Built daily
-- [`1.1.0` (*Dockerfile*)](https://github.com/willfarrell/docker-autoheal/blob/1.1.0/Dockerfile)
-- [`v0.7.0` (*Dockerfile*)](https://github.com/willfarrell/docker-autoheal/blob/v0.7.0/Dockerfile)
+## 项目结构
 
+```text
+.
+├── Dockerfile                 # autoheal 镜像构建文件
+├── docker-entrypoint          # 主入口脚本，负责监控、重启与通知
+├── README.md                  # 项目说明
+├── CHANGELOG.md               # 变更记录
+├── LICENSE                    # 开源许可证
+└── tests/                     # 本地测试与示例编排文件
+    ├── docker-compose.yml
+    ├── docker-compose.autoheal.yml
+    ├── README.md
+    ├── tests.sh
+    └── watch-autoheal/
+```
 
-![](https://img.shields.io/docker/pulls/willfarrell/autoheal "Total docker pulls") [![](https://images.microbadger.com/badges/image/willfarrell/autoheal.svg)](http://microbadger.com/images/willfarrell/autoheal "Docker layer breakdown")
+## 使用方式
 
-## How to use
+### Docker CLI
 
-### 1. Docker CLI
-#### UNIX socket passthrough
+通过 Unix Socket 监控本机 Docker：
+
 ```bash
 docker run -d \
-    --name autoheal \
-    --restart=always \
-    -e AUTOHEAL_CONTAINER_LABEL=all \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    willfarrell/autoheal
+  --name autoheal \
+  --restart=always \
+  -e AUTOHEAL_CONTAINER_LABEL=all \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  willfarrell/autoheal
 ```
-#### TCP socket 
+
+通过 TCP Socket 监控远端 Docker：
+
 ```bash
 docker run -d \
-    --name autoheal \
-    --restart=always \
-    -e AUTOHEAL_CONTAINER_LABEL=all \
-    -e DOCKER_SOCK=tcp://$HOST:$PORT \
-    -v /path/to/certs/:/certs/:ro \
-    willfarrell/autoheal
+  --name autoheal \
+  --restart=always \
+  -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e DOCKER_SOCK=tcp://$HOST:$PORT \
+  -v /path/to/certs/:/certs/:ro \
+  willfarrell/autoheal
 ```
-#### TCP with mTLS (HTTPS)
+
+通过 TCP mTLS 监控远端 Docker：
+
 ```bash
 docker run -d \
-    --name autoheal \
-    --restart=always \
-    --tlscacert=/certs/ca.pem \
-    --tlscert=/certs/client-cert.pem \
-    --tlskey=/certs/client-key.pem \
-    -e AUTOHEAL_CONTAINER_LABEL=all \
-    -e DOCKER_HOST=tcp://$HOST:2376 \
-    -e DOCKER_SOCK=tcps://$HOST:2376 \
-    -e DOCKER_TLS_VERIFY=1 \
-    -v /path/to/certs/:/certs/:ro \
-    willfarrell/autoheal
-```
-The certificates and keys need these names and resides under /certs inside the container:
-* ca.pem
-* client-cert.pem
-* client-key.pem
-
-> See https://docs.docker.com/engine/security/https/ for how to configure TCP with mTLS
-
-### Change Timezone
-If you need the timezone to match the local machine, you can map the `/etc/localtime` into the container.
-```bash
-docker run ... -v /etc/localtime:/etc/localtime:ro
+  --name autoheal \
+  --restart=always \
+  --tlscacert=/certs/ca.pem \
+  --tlscert=/certs/client-cert.pem \
+  --tlskey=/certs/client-key.pem \
+  -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e DOCKER_HOST=tcp://$HOST:2376 \
+  -e DOCKER_SOCK=tcps://$HOST:2376 \
+  -e DOCKER_TLS_VERIFY=1 \
+  -v /path/to/certs/:/certs/:ro \
+  willfarrell/autoheal
 ```
 
-### 2. Use in your container image
-Choose one of the three alternatives:
+证书文件需要挂载到容器内 `/certs`，文件名固定为：
 
-a) Apply the label `autoheal=true` to your container to have it watched;<br/>
-b) Set ENV `AUTOHEAL_CONTAINER_LABEL=all` to watch all running containers;<br/>
-c) Set ENV `AUTOHEAL_CONTAINER_LABEL` to existing container label that has the value `true`;<br/>
+- `ca.pem`
+- `client-cert.pem`
+- `client-key.pem`
 
-> Note: You must apply `HEALTHCHECK` to your docker images first.<br/>
-> See https://docs.docker.com/engine/reference/builder/#healthcheck for details.
+### 业务容器标签
 
-#### Docker Compose (example)
+业务镜像需要先配置 `HEALTHCHECK`。autoheal 支持三种选择器：
+
+- 给需要监控的容器添加 `autoheal=true` 标签。
+- 设置 `AUTOHEAL_CONTAINER_LABEL=all` 监控全部容器。
+- 设置 `AUTOHEAL_CONTAINER_LABEL` 为自定义标签名，且业务容器标签值为 `true`。
+
+Docker Compose 示例：
+
 ```yaml
 services:
   app:
-    extends:
-      file: ${PWD}/services.yml
-      service: app
+    image: your-app:latest
     labels:
       autoheal-app: true
 
   autoheal:
-    deploy:
-      replicas: 1
+    image: willfarrell/autoheal:latest
     environment:
       AUTOHEAL_CONTAINER_LABEL: autoheal-app
-    image: willfarrell/autoheal:latest
     network_mode: none
     restart: always
     volumes:
@@ -95,28 +97,82 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 ```
 
-#### Optional Container Labels
-|`autoheal.stop.timeout=20`            |Per containers override for stop timeout seconds during restart|
-| --- | --- |
+### 飞书消息卡片通知
 
-## Environment Defaults
-|Variable                              |Description|
-| --- | --- |
-|`AUTOHEAL_CONTAINER_LABEL=autoheal`   |set to existing label name that has the value `true`|
-|`AUTOHEAL_INTERVAL=5`                 |check every 5 seconds|
-|`AUTOHEAL_START_PERIOD=0`             |wait 0 seconds before first health check|
-|`AUTOHEAL_DEFAULT_STOP_TIMEOUT=10`    |Docker waits max 10 seconds (the Docker default) for a container to stop before killing during restarts (container overridable via label, see below)|
-|`AUTOHEAL_ONLY_MONITOR_RUNNING=false` |All containers monitored by default. Set this to true to only monitor running containers. This will result in Paused contaners being ignored.|
-|`DOCKER_SOCK=/var/run/docker.sock`    |Unix socket for curl requests to Docker API|
-|`CURL_TIMEOUT=30`                     |--max-time seconds for curl requests to Docker API|
-|`WEBHOOK_URL=""`                      |post message to the webhook if a container was restarted (or restart failed)|
+配置 `WEBHOOK_URL` 后，容器重启成功或失败时会默认发送飞书交互卡片消息：
 
-## Testing (building locally)
+```bash
+docker run -d \
+  --name autoheal \
+  --restart=always \
+  -e AUTOHEAL_CONTAINER_LABEL=all \
+  -e WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  willfarrell/autoheal
+```
+
+默认 payload 类型为 `WEBHOOK_TYPE=feishu_card`，发送内容包含宿主主机名、容器名称、短 ID、处理结果、发生时间和重启结果说明。失败通知使用红色卡片头，成功通知使用绿色卡片头。
+
+`AUTOHEAL_HOSTNAME` 未配置时会优先从 Docker API `/info.Name` 获取宿主主机名；获取失败时回退到容器内 `hostname` 命令结果。如需固定展示名称，可在部署时显式传入：
+
+```bash
+-e AUTOHEAL_HOSTNAME="$(hostname)"
+```
+
+如需兼容旧版普通 JSON 文本 webhook，可设置：
+
+```bash
+-e WEBHOOK_TYPE=text
+-e WEBHOOK_JSON_KEY=content
+```
+
+此时 payload 格式为：
+
+```json
+{
+  "content": "Host prod-node-01: Container app (abc123def456) found to be unhealthy. Successfully restarted the container!"
+}
+```
+
+## 可选容器标签
+
+| 标签 | 说明 |
+| --- | --- |
+| `autoheal.stop.timeout=20` | 单容器重启超时时间，单位秒 |
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `AUTOHEAL_CONTAINER_LABEL` | `autoheal` | 监控标签名，标签值需要为 `true`；设置为 `all` 时监控全部容器 |
+| `AUTOHEAL_INTERVAL` | `5` | 健康状态检查间隔，单位秒 |
+| `AUTOHEAL_START_PERIOD` | `0` | 首次检查前等待时间，单位秒 |
+| `AUTOHEAL_DEFAULT_STOP_TIMEOUT` | `10` | Docker 重启容器时等待停止的默认超时时间 |
+| `AUTOHEAL_ONLY_MONITOR_RUNNING` | `false` | 设置为 `true` 时仅监控运行中的容器 |
+| `AUTOHEAL_HOSTNAME` | 自动取 Docker 宿主机名 | 告警中展示的宿主主机名；未配置时优先取 Docker API `/info.Name` |
+| `DOCKER_SOCK` | `/var/run/docker.sock` | Docker API Socket 地址 |
+| `CURL_TIMEOUT` | `30` | Docker API 请求超时时间，单位秒 |
+| `WEBHOOK_URL` | 空 | 重启成功或失败时发送 webhook 通知 |
+| `WEBHOOK_TYPE` | `feishu_card` | webhook payload 类型；`feishu_card` 为飞书消息卡片，`text` 为普通 JSON 文本 |
+| `WEBHOOK_JSON_KEY` | `content` | `WEBHOOK_TYPE=text` 时的 JSON 字段名 |
+| `APPRISE_URL` | 空 | Apprise 通知地址 |
+| `POST_RESTART_SCRIPT` | 空 | 容器重启后异步执行的脚本 |
+
+## 本地构建测试
+
 ```bash
 docker buildx build -t autoheal .
 
 docker run -d \
-    -e AUTOHEAL_CONTAINER_LABEL=all \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    autoheal
+  -e AUTOHEAL_CONTAINER_LABEL=all \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  autoheal
+```
+
+构建镜像时默认使用阿里云 Alpine 源加速 `apk` 安装。如需切换镜像源，可传入：
+
+```bash
+docker buildx build \
+  --build-arg APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine \
+  -t autoheal .
 ```

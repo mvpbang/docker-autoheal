@@ -1,0 +1,25 @@
+services:
+  # 你的业务容器
+  ngx:
+    image: nginx:latest
+    restart: always
+    labels:
+      - "autoheal=true" # 贴上这个标签，告诉 autoheal 需要监控它
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+      start_interval: 5s
+
+  # 负责自动重启的工具容器
+  autoheal:
+    #image: willfarrell/autoheal:latest
+    image: docker-autoheal
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/5f4bff2e-60a9-499c-91e2-7f2fe7efbe28
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # 需要挂载 docker 套接字来执行重启命令
