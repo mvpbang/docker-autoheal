@@ -14,22 +14,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4  # 升级至 v4，速度更快，支持 Node.js 20
+        uses: actions/checkout@v5  # 升级至 v5，原生支持现代 Node.js 运行时
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3  # 升级至 v3，全面支持新架构
+        uses: docker/setup-qemu-action@v4  # 升级至 v4
 
       - name: Set up Docker Buildx
         id: buildx
-        uses: docker/setup-buildx-action@v3  # 升级至 v3
+        uses: docker/setup-buildx-action@v4  # 升级至 v4
 
       - name: Login to DockerHub
-        uses: docker/login-action@v3  # 升级至 v3
+        uses: docker/login-action@v4  # 升级至 v4
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 动态提取并设置镜像标签，同时兼容定时任务（Cron）
       - name: Set Docker Tag
         run: |
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
@@ -41,12 +40,11 @@ jobs:
           fi
 
       - name: Build and push
-        uses: docker/build-push-action@v6  # 升级至 v6，完美适配最新 Docker 特性
+        uses: docker/build-push-action@v7  # 升级至 v7，完美适配最新运行环境
         with:
           context: .
           file: ./Dockerfile
           push: true
-          # 移除了已经极为罕见且基础镜像通常不支持的 linux/386
-          platforms: linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7,linux/ppc64le
+          platforms: linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64/v8,linux/ppc64le,linux/riscv64
           tags: |
             ${{ env.tag }}
