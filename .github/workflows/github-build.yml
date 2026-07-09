@@ -47,7 +47,6 @@ jobs:
           file: ./Dockerfile
           push: true
           # 移除了已经极为罕见且基础镜像通常不支持的 linux/386
-          # 增加了现代开源硬件主流的 linux/riscv64 架构
-          platforms: linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7,linux/ppc64le,linux/riscv64
+          platforms: linux/amd64,linux/arm64,linux/arm/v6,linux/arm/v7,linux/ppc64le
           tags: |
             ${{ env.tag }}
